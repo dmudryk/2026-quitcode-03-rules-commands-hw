@@ -12,13 +12,13 @@ runtime-залежностей**. Джерело істини про архіт�
 | Команда | Що робить |
 |---|---|
 | `npm install` | встановити залежності (лише dev) |
-| `npm test` | Vitest, без реальної мережі — 18 тестів |
+| `npm test` | Vitest, без реальної мережі — 21 тест |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run check:rules` | статична перевірка конвенцій проєкту |
 
-Базова лінія спадкового коду: `check:rules` → `TOTAL: 8 violation(s)`
-(7 у `src/integrations/sheets-append.ts`, 1 у `src/sync/state.ts`). Нових порушень
-додавати не можна.
+Поточна лінія: `check:rules` → `TOTAL: 1 violation(s)` — `json-via-parse` у
+`src/sync/state.ts`, спадковий код, який переписують окремою задачею (він же корінна
+причина інциденту з `materials/error-log.txt`). Нових порушень додавати не можна.
 
 ## Карта проєкту
 
