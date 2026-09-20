@@ -1,0 +1,65 @@
+diff --git a/app/src/core/types.ts b/app/src/core/types.ts
+index 72303a0..b6f232c 100644
+--- a/app/src/core/types.ts
++++ b/app/src/core/types.ts
+@@ -8,6 +8,8 @@ export interface Lead {
+   email: string;
+   phone?: string;
+   source: "website" | "instagram" | "referral";
++  /** Рекламна кампанія з форми сайту (utm_campaign). Відсутня, якщо форма її не передала. */
++  utmCampaign?: string;
+   budgetUsd?: number;
+   /** ISO-8601, UTC. */
+   createdAt: string;
+diff --git a/app/src/integrations/sheets-append.test.ts b/app/src/integrations/sheets-append.test.ts
+index 12e42ce..597638b 100644
+--- a/app/src/integrations/sheets-append.test.ts
++++ b/app/src/integrations/sheets-append.test.ts
+@@ -32,7 +32,31 @@ describe("sheets-append", () => {
+     const [url, init] = fetchMock.mock.calls[0]!;
+     expect(url).toBe("https://sheets.example.test/append?token=fake-sheets-token-0000");
+     expect(JSON.parse(String(init?.body))).toEqual({
+-      values: [["2026-09-10T09:30:00.000Z", "Андрій Тестовий", "andrii@studio-nova.example.test", "", "instagram"]],
++      values: [["2026-09-10T09:30:00.000Z", "Андрій Тестовий", "andrii@studio-nova.example.test", "", "instagram", ""]],
++    });
++  });
++
++  it("записує кампанію лідa останньою колонкою", async () => {
++    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response('{"status":"ok"}', { status: 200 }));
++    vi.stubGlobal("fetch", fetchMock);
++
++    await expect(sheetsAppend.send({ ...lead, utmCampaign: "spring_sale_2026" })).resolves.toEqual({
++      ok: true,
++      value: undefined,
++    });
++
++    const [, init] = fetchMock.mock.calls[0]!;
++    expect(JSON.parse(String(init?.body))).toEqual({
++      values: [
++        [
++          "2026-09-10T09:30:00.000Z",
++          "Андрій Тестовий",
++          "andrii@studio-nova.example.test",
++          "",
++          "instagram",
++          "spring_sale_2026",
++        ],
++      ],
+     });
+   });
+ 
+diff --git a/app/src/integrations/sheets-append.ts b/app/src/integrations/sheets-append.ts
+index a4ece65..409ea2e 100644
+--- a/app/src/integrations/sheets-append.ts
++++ b/app/src/integrations/sheets-append.ts
+@@ -27,7 +27,9 @@ const sheetsAppend: Integration = {
+ 
+     const url = `${webhookUrl.value}?token=${token.value}`;
+     const response = await postJson(url, {
+-      values: [[lead.createdAt, lead.name, lead.email, lead.phone ?? "", lead.source]],
++      values: [
++        [lead.createdAt, lead.name, lead.email, lead.phone ?? "", lead.source, lead.utmCampaign ?? ""],
++      ],
+     });
+     if (!response.ok) {
+       log.error(`sheets-append: lead ${lead.id} not delivered: ${response.error}`);
