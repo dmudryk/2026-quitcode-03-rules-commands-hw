@@ -22,8 +22,34 @@ const readStdin = async () => {
   return Buffer.concat(chunks).toString("utf8");
 };
 
-// Windows дає шляхи з "\" і довільним регістром диска — зводимо до одного вигляду.
+// Windows дає шляхи з "\" і довільним регістром — зводимо до одного вигляду.
 const normalize = (path) => path.replace(/\\/g, "/").toLowerCase();
+
+// Яка із захищених зон зачеплена, якщо взагалі зачеплена.
+// loose = true — для сирого тексту події, де шлях не обов'язково стоїть на межі
+// сегмента; там краще перестрахуватись і заблокувати, ніж пропустити.
+const findZone = (text, loose = false) => {
+  const normalized = normalize(text);
+  return PROTECTED.find((zone) => {
+    const needle = normalize(zone);
+    if (loose) return normalized.includes(needle);
+    return normalized.startsWith(needle) || normalized.includes(`/${needle}`);
+  });
+};
+
+const block = (zone, what, note) => {
+  console.error(
+    [
+      `ЗАБЛОКОВАНО: ${what}`,
+      `Шлях у захищеній зоні "${zone}" — правило .claude/rules/do-not-touch.md.`,
+      ...(note ? [note] : []),
+      "Це не помилка інструмента: у звичайних задачах ця зона не редагується взагалі.",
+      "Зупинись і опиши людині: що саме треба змінити (файл, експорт, рядок), навіщо,",
+      "який мінімальний вигляд має зміна і що можна зробити поза захищеною зоною.",
+    ].join("\n"),
+  );
+  process.exit(2);
+};
 
 const raw = await readStdin();
 
@@ -31,7 +57,11 @@ let event;
 try {
   event = JSON.parse(raw);
 } catch {
-  // Невідомий формат події — не блокуємо роботу, але лишаємо слід у stderr.
+  // Формат події невідомий. Тихо пропустити тут — значить лишити дірку в захисті,
+  // тому шукаємо захищену зону прямо в сирому тексті події: якщо вона там згадана,
+  // блокуємо. Якщо ні — не заважаємо роботі.
+  const zone = findZone(raw, true);
+  if (zone) block(zone, "подія хука зі згадкою захищеної зони", "JSON події не розібрався, тому шлях узято з сирого тексту.");
   console.error("protect-core: не вдалося розібрати JSON події хука");
   process.exit(0);
 }
@@ -39,18 +69,7 @@ try {
 const filePath = event?.tool_input?.file_path ?? event?.tool_input?.path ?? "";
 if (!filePath) process.exit(0);
 
-const normalized = normalize(filePath);
-const hit = PROTECTED.find((zone) => normalized.includes(`/${normalize(zone)}`) || normalized.startsWith(normalize(zone)));
+const zone = findZone(filePath);
+if (!zone) process.exit(0);
 
-if (!hit) process.exit(0);
-
-console.error(
-  [
-    `ЗАБЛОКОВАНО: ${filePath}`,
-    `Шлях у захищеній зоні "${hit}" — правило .claude/rules/do-not-touch.md.`,
-    "Це не помилка інструмента: у звичайних задачах ця зона не редагується взагалі.",
-    "Зупинись і опиши людині: що саме треба змінити (файл, експорт, рядок), навіщо,",
-    "який мінімальний вигляд має зміна і що можна зробити поза захищеною зоною.",
-  ].join("\n"),
-);
-process.exit(2);
+block(zone, filePath);
