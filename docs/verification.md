@@ -301,6 +301,8 @@ C:\Users\HP\OneDrive - BPO Nextdoor\Документи\GitHub\2026-quitcode-03-r
 | `app/src/core/log.ts` | блок | ✅ exit 2 |
 | `app/src/CORE/log.ts` (інший регістр) | блок | ✅ exit 2 |
 | `C:\repo\app\src\core\types.ts` (Windows) | блок | ✅ exit 2 |
+| `app/src/integrations/../core/types.ts` (обхід через `..`) | блок | ✅ exit 2 |
+| `./app/./src/core/log.ts` (обхід через `./`) | блок | ✅ exit 2 |
 | `app/scripts/core.lock.json` | блок | ✅ exit 2 |
 | `materials/ab-task.md` | блок | ✅ exit 2 |
 | `/x/.coderabbit.yaml` | блок | ✅ exit 2 |
@@ -310,7 +312,14 @@ C:\Users\HP\OneDrive - BPO Nextdoor\Документи\GitHub\2026-quitcode-03-r
 | `docs/app/src/core-notes.md` (схожа назва, не зона) | пропуск | ✅ exit 0 |
 | сам `.claude/hooks/protect-core.mjs` | пропуск | ✅ exit 0 |
 
-Два випадки тут не косметичні:
+Три випадки тут не косметичні:
+
+- **Обхід через `..` — знайшов CodeRabbit, не я.** Перша версія хука порівнювала
+  **необроблений рядок**, тому подія з `file_path: "app/src/integrations/../core/types.ts"`
+  проходила з кодом 0 — хоча це рівно той самий `app/src/core/types.ts`. Тобто новий
+  захисний код сам мав дірку, через яку його можна було обійти однією крапкою. Тепер
+  шлях спершу канонізується через `resolve()` з `node:path` (згортає `..` і `.`, робить
+  абсолютним), і лише потім перевіряється на межі сегмента. Перевірено окремим кейсом.
 
 - **Регістр.** На Windows `app/src/CORE/` — той самий файл, що й `app/src/core/`.
   Порівняння без нормалізації регістру дало б обхід захисту однією клавішею Shift,
