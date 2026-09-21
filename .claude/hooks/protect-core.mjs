@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // PreToolUse hook: забороняє запис у захищені зони проєкту (правило do-not-touch).
 //
-// Читає JSON події зі stdin, бере шлях із tool_input.file_path і, якщо він веде в
-// захищену зону, пише причину в stderr і завершується з кодом 2 — Claude Code
-// скасовує дію й показує цей текст агенту.
+// Читає JSON події зі stdin, дістає з неї всі шляхи, куди інструмент збирається
+// писати, і якщо хоч один веде в захищену зону — пише причину в stderr і виходить
+// з кодом 2. Claude Code скасовує дію й показує цей текст агенту.
 //
 // Node, а не bash: так хук працює і на Windows.
 // Виходи: 0 — дозволено, 2 — заблоковано.
+//
+// Принцип: fail-closed. Якщо шлях визначити не вдалося — блокуємо. Хук стоїть лише
+// на інструментах запису, тож «не знаю, куди пишуть» — недостатня підстава пускати.
+// Гучна відмова краща за тихо знятий захист: у повідомленні видно, що сталося.
 import { resolve } from "node:path";
 
 const PROTECTED = [
@@ -17,31 +21,42 @@ const PROTECTED = [
   ".coderabbit.yaml",
 ];
 
+const IS_WINDOWS = process.platform === "win32";
+
 const readStdin = async () => {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
 };
 
-// Windows дає шляхи з "\" і довільним регістром — зводимо до одного вигляду.
-const flatten = (path) => path.replace(/\\/g, "/").toLowerCase();
+// Нормалізація — лише там, де вона правильна. На Windows "\" є роздільником, а
+// регістр не має значення. На POSIX "\" — звичайний символ імені файлу, а регістр
+// значущий: там шлях лишаємо як є, інакше файл `tmp\app/src/core/log.ts` (який до
+// захищеної зони не належить) блокувався б помилково.
+const flatten = (path) => (IS_WINDOWS ? path.replace(/\\/g, "/").toLowerCase() : path);
 
-// Канонічний шлях: resolve() робить його абсолютним і згортає "." та "..".
-// Без цього "app/src/integrations/../core/types.ts" — той самий файл у захищеній
-// зоні — проходив би повз перевірку рядків.
+// resolve() робить шлях абсолютним і згортає "." та "..", тому
+// "app/src/integrations/../core/types.ts" не прослизне повз перевірку рядків.
 const canonical = (path) => flatten(resolve(path));
 
-// Яка із захищених зон зачеплена, якщо взагалі зачеплена.
 const findZone = (path) => {
   const normalized = canonical(path);
   return PROTECTED.find((zone) => normalized.includes(`/${flatten(zone)}`));
 };
 
-// Те саме для сирого тексту події, який неможливо канонізувати: шукаємо згадку
-// захищеної зони будь-де. Тут краще перестрахуватись і заблокувати, ніж пропустити.
+// Для сирого тексту події, який не вдалося розібрати: шукаємо згадку зони будь-де.
 const findZoneInText = (text) => {
   const normalized = flatten(text);
   return PROTECTED.find((zone) => normalized.includes(flatten(zone)));
+};
+
+// Усі поля, якими інструменти запису передають ціль: Edit/Write — file_path,
+// NotebookEdit — notebook_path, MultiEdit — ще й список правок.
+const targetsOf = (input) => {
+  const edits = Array.isArray(input?.edits) ? input.edits.map((edit) => edit?.file_path) : [];
+  return [input?.file_path, input?.path, input?.notebook_path, ...edits].filter(
+    (value) => typeof value === "string" && value.trim() !== "",
+  );
 };
 
 const block = (zone, what, note) => {
@@ -58,25 +73,36 @@ const block = (zone, what, note) => {
   process.exit(2);
 };
 
+const blockUnknown = (reason) => {
+  console.error(
+    [
+      `ЗАБЛОКОВАНО: ${reason}`,
+      "Хук не зміг визначити, куди веде запис, тому блокує дію — захист ядра не має",
+      "залежати від того, чи впізнав він форму події.",
+      "Якщо це помилкове спрацювання, перевір .claude/hooks/protect-core.mjs і формат",
+      "події в каналі виводу Hooks — але не обходь захист.",
+    ].join("\n"),
+  );
+  process.exit(2);
+};
+
 const raw = await readStdin();
 
 let event;
 try {
   event = JSON.parse(raw);
 } catch {
-  // Формат події невідомий. Тихо пропустити тут — значить лишити дірку в захисті,
-  // тому шукаємо захищену зону прямо в сирому тексті події: якщо вона там згадана,
-  // блокуємо. Якщо ні — не заважаємо роботі.
   const zone = findZoneInText(raw);
-  if (zone) block(zone, "подія хука зі згадкою захищеної зони", "JSON події не розібрався, тому шлях узято з сирого тексту.");
-  console.error("protect-core: не вдалося розібрати JSON події хука");
-  process.exit(0);
+  if (zone) block(zone, "подія хука зі згадкою захищеної зони", "JSON події не розібрався, шлях узято з сирого тексту.");
+  blockUnknown("не вдалося розібрати JSON події хука");
 }
 
-const filePath = event?.tool_input?.file_path ?? event?.tool_input?.path ?? "";
-if (!filePath) process.exit(0);
+const targets = targetsOf(event?.tool_input);
+if (targets.length === 0) blockUnknown("у події немає шляху запису (file_path / path / notebook_path)");
 
-const zone = findZone(filePath);
-if (!zone) process.exit(0);
+for (const target of targets) {
+  const zone = findZone(target);
+  if (zone) block(zone, target);
+}
 
-block(zone, filePath);
+process.exit(0);
